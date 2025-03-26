@@ -1,0 +1,63 @@
+name: Weekly Versioning & Changelog
+
+on:
+  schedule:
+    - cron: "0 0 * * 0"  # Runs every Sunday at midnight UTC
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  track_repos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Versioning Repository
+        uses: actions/checkout@v3
+
+      - name: Install GitHub CLI & jq
+        run: sudo apt update && sudo apt install -y gh jq
+
+      - name: Get List of Repositories
+        id: repo_list
+        run: |
+          gh repo list Vamsi16-DevOps --json name --limit 500 > repos.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+
+      - name: Process Repositories
+        run: |
+          echo "# Weekly Production Changes (Date: $(date +'%Y-%m-%d'))" > weekly_report.md
+          echo "" >> weekly_report.md
+
+          for repo in $(jq -r '.[].name' repos.json); do
+            echo "🔍 Processing $repo..."
+
+            # Get the last tag (fallback to v0.0.0 if no tags exist)
+            LAST_TAG=$(gh release list --repo Vamsi16-DevOps/$repo --limit 1 | awk '{print $1}' || echo "v0.0.0")
+            
+            # Bump minor version
+            IFS='.' read -r major minor patch <<< "${LAST_TAG//v/}"
+            NEW_VERSION="v$major.$((minor+1)).$patch"
+
+            # Fetch commit log for the past 7 days
+            gh api repos/Vamsi16-DevOps/$repo/commits?since=$(date -d '7 days ago' --utc --iso-8601) > commits.json
+            jq -r '.[].commit.message' commits.json > "$repo-changelog.md"
+
+            # Create a new GitHub Release
+            gh release create $NEW_VERSION -R Vamsi16-DevOps/$repo -F "$repo-changelog.md" -t "Weekly Release $NEW_VERSION" --generate-notes
+            
+            # Append to central report
+            echo "## 🔹 [$repo](https://github.com/Vamsi16-DevOps/$repo)" >> weekly_report.md
+            echo "\`\`\`" >> weekly_report.md
+            cat "$repo-changelog.md" >> weekly_report.md
+            echo "\`\`\`" >> weekly_report.md
+            echo "" >> weekly_report.md
+
+          done
+          
+          # Commit weekly report to versioning repo
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add weekly_report.md
+          git commit -m "Weekly summary report $(date +'%Y-%m-%d')"
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
