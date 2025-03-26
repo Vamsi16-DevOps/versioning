@@ -1,4 +1,4 @@
-name: Frequent Versioning & Changelog
+name: Track Production Changes
 
 on:
   schedule:
@@ -8,46 +8,49 @@ on:
 jobs:
   track_repos:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Versioning Repository
+      - name: Checkout versioning repo
         uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GH_PAT }}  # Use PAT to allow pushing changes
 
-      - name: Install GitHub CLI & jq
-        run: sudo apt update && sudo apt install -y gh jq
-
-      - name: Get List of Repositories
-        id: repo_list
+      - name: Configure Git
         run: |
-          gh repo list Vamsi16-DevOps --json name --limit 500 > repos.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
-
-      - name: Process Repositories
-        run: |
-          echo "# Latest Production Changes (Updated: $(date +'%Y-%m-%d %H:%M:%S'))" > latest_report.md
-          echo "" >> latest_report.md
-
-          for repo in $(jq -r '.[].name' repos.json); do
-            echo "🔍 Checking $repo..."
-
-            # Fetch commit log for the past 5 minutes
-            gh api repos/Vamsi16-DevOps/$repo/commits?since=$(date -d '5 minutes ago' --utc --iso-8601) > commits.json
-            jq -r '.[].commit.message' commits.json > "$repo-latest.md"
-
-            # Append to report
-            echo "## 🔹 [$repo](https://github.com/Vamsi16-DevOps/$repo)" >> latest_report.md
-            echo "\`\`\`" >> latest_report.md
-            cat "$repo-latest.md" >> latest_report.md
-            echo "\`\`\`" >> latest_report.md
-            echo "" >> latest_report.md
-
-          done
-          
-          # Commit updated report to versioning repo
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
+
+      - name: Fetch list of repositories
+        run: |
+          echo "Fetching repositories..."
+          echo "# Weekly Report of Production Changes" > latest_report.md
+          echo "Updated at: $(date +'%Y-%m-%d %H:%M:%S')" >> latest_report.md
+          echo "" >> latest_report.md
+
+          # Get list of repositories in the organization
+          repos=$(curl -s -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            "https://api.github.com/orgs/Vamsi16-DevOps/repos?per_page=100" | jq -r '.[].name')
+
+          for repo in $repos; do
+            echo "Checking $repo..."
+            
+            # Fetch last 7 days commits
+            commits=$(curl -s -H "Authorization: token ${{ secrets.GH_PAT }}" \
+              "https://api.github.com/repos/Vamsi16-DevOps/$repo/commits?since=$(date -d '7 days ago' --iso-8601=s)")
+
+            if [ "$(echo $commits | jq length)" -gt 0 ]; then
+              echo "### [$repo](https://github.com/Vamsi16-DevOps/$repo)" >> latest_report.md
+              echo "\`\`\`" >> latest_report.md
+              echo "$commits" | jq -r '.[].commit.message' >> latest_report.md
+              echo "\`\`\`" >> latest_report.md
+              echo "" >> latest_report.md
+            fi
+          done
+
+      - name: Commit and Push Changes
+        run: |
           git add latest_report.md
-          git commit -m "Updated list of production changes at $(date +'%Y-%m-%d %H:%M:%S')"
-          git push origin main
+          git commit -m "Updated list of production changes at $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
+          git push origin main || echo "No changes to push"
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ secrets.GH_PAT }}
